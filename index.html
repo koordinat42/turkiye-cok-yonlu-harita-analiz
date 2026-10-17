@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="tr" class="h-full bg-slate-900 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Türkiye Demografik Kartogram Web CBS</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- D3.js v7 for Cartogram Calculations & Rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        
+        /* Smooth transitions for SVG elements */
+        .cartogram-node {
+            transition: fill 0.3s ease, stroke-width 0.2s ease, filter 0.2s ease;
+            cursor: pointer;
+        }
+        .cartogram-node:hover {
+            stroke: #ffffff;
+            stroke-width: 3px;
+            filter: drop-shadow(0px 0px 8px rgba(255, 255, 255, 0.6));
+        }
+        
+        .cartogram-label {
+            pointer-events: none;
+            user-select: none;
+            font-weight: 600;
+            text-shadow: 0px 1px 3px rgba(0,0,0,0.8);
+        }
+        
+        /* Custom Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(51, 65, 85, 0.8);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(71, 85, 105, 1);
+        }
+
+        /* Glassmorphism Panels */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden bg-slate-950 text-slate-100">
+
+    <!-- Top Header Navigation -->
+    <header class="h-16 border-b border-slate-800 glass-panel z-20 flex items-center justify-between px-4 sm:px-6 shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="p-2 bg-gradient-to-tr from-cyan-600 to-blue-600 rounded-xl shadow-lg shadow-cyan-500/20">
+                <i data-lucide="map-pin" class="w-6 h-6 text-white"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold bg-gradient-to-r from-white via-slate-200 to-cyan-400 bg-clip-text text-transparent leading-tight">
+                    Türkiye Demografik Kartogram Web CBS
+                </h1>
+                <p class="text-xs text-slate-400 hidden sm:block">
+                    Mekânsal Veri Analizi ve Alan-Deforme Tematik Haritalama Portalı
+                </p>
+            </div>
+        </div>
+
+        <!-- Quick Summary Metrics Ticker -->
+        <div class="hidden md:flex items-center gap-6 text-xs border-l border-slate-800 pl-6">
+            <div class="flex flex-col">
+                <span class="text-slate-400">Toplam Nüfus</span>
+                <span class="font-bold text-cyan-400 text-sm" id="ticker-pop">85.372.377</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-slate-400">İl Sayısı</span>
+                <span class="font-bold text-slate-200 text-sm">81 İl</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-slate-400">Ortalama Yaş</span>
+                <span class="font-bold text-emerald-400 text-sm" id="ticker-age">33.8 Yıl</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-slate-400">En Yoğun İl</span>
+                <span class="font-bold text-amber-400 text-sm">İstanbul (3,052/km²)</span>
+            </div>
+        </div>
+
+        <!-- Quick Action Buttons -->
+        <div class="flex items-center gap-2">
+            <button id="btn-compare-modal" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 flex items-center gap-1.5 transition">
+                <i data-lucide="columns-2" class="w-4 h-4 text-cyan-400"></i>
+                <span class="hidden sm:inline">İl Karşılaştır</span>
+            </button>
+            <button id="btn-export-svg" class="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium flex items-center gap-1.5 transition shadow-lg shadow-cyan-900/30">
+                <i data-lucide="download" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">Haritayı İndir</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Application Container -->
+    <div class="flex-1 flex overflow-hidden relative">
+
+        <!-- Left Sidebar - Control Panel -->
+        <aside id="sidebar" class="w-80 lg:w-96 border-r border-slate-800 glass-panel flex flex-col z-10 shrink-0 transition-all duration-300">
+            <!-- Sidebar Header / Tabs -->
+            <div class="p-4 border-b border-slate-800 flex justify-between items-center">
+                <h2 class="text-sm font-semibold flex items-center gap-2 text-slate-200">
+                    <i data-lucide="sliders" class="w-4 h-4 text-cyan-400"></i>
+                    CBS Harita Ayarları
+                </h2>
+                <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800">Interaktif V3</span>
+            </div>
+
+            <!-- Controls Scroll Area -->
+            <div class="flex-1 overflow-y-auto p-4 space-y-6">
+
+                <!-- 1. Demografik Metrik Seçimi -->
+                <div class="space-y-2">
+                    <label class="text-xs font-medium text-slate-300 flex items-center justify-between">
+                        <span>Gösterge / Metrik Seçimi</span>
+                        <i data-lucide="bar-chart-2" class="w-3.5 h-3.5 text-slate-400"></i>
+                    </label>
+                    <select id="metric-select" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500">
+                        <option value="population" selected>👥 Toplam Nüfus (Kişi)</option>
+                        <option value="density">📐 Nüfus Yoğunluğu (Kişi / km²)</option>
+                        <option value="gdp">💰 Kişi Başına GSYH (USD $)</option>
+                        <option value="education">🎓 Yükseköğretim Mezunu Oranı (%)</option>
+                        <option value="medianAge">⏳ Ortanca Yaş (Yıl)</option>
+                        <option value="vehicles">🚗 Motorlu Kara Taşıtı Sayısı</option>
+                        <option value="forest">🌲 Ormanlık Alan Oranı (%)</option>
+                        <option value="popGrowth">📈 Yıllık Nüfus Artış Hızı (‰)</option>
+                    </select>
+                    <p id="metric-desc" class="text-[11px] text-slate-400 italic">
+                        İllerin 2023/2024 TÜİK verilerine göre toplam yerleşik nüfus dağılımı.
+                    </p>
+                </div>
+
+                <!-- 2. Kartogram & Harita Tipi -->
+                <div class="space-y-2">
+                    <label class="text-xs font-medium text-slate-300 flex items-center justify-between">
+                        <span>Harita Görünüm Modu</span>
+                        <i data-lucide="layers" class="w-3.5 h-3.5 text-slate-400"></i>
+                    </label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button data-mode="dorling" class="mode-btn active p-2.5 rounded-lg border text-xs font-medium flex flex-col items-center gap-1.5 transition bg-cyan-950/80 border-cyan-500 text-cyan-300">
+                            <i data-lucide="circle-dot" class="w-5 h-5"></i>
+                            Dorling (Daire)
+                        </button>
+                        <button data-mode="demers" class="mode-btn p-2.5 rounded-lg border border-slate-800 bg-slate-900 text-slate-400 hover:bg-slate-800 text-xs font-medium flex flex-col items-center gap-1.5 transition">
+                            <i data-lucide="square" class="w-5 h-5"></i>
+                            Demers (Kare)
+                        </button>
+                        <button data-mode="continuous" class="mode-btn p-2.5 rounded-lg border border-slate-800 bg-slate-900 text-slate-400 hover:bg-slate-800 text-xs font-medium flex flex-col items-center gap-1.5 transition">
+                            <i data-lucide="combine" class="w-5 h-5"></i>
+                            Sürekli Kartogram
+                        </button>
+                        <button data-mode="geographic" class="mode-btn p-2.5 rounded-lg border border-slate-800 bg-slate-900 text-slate-400 hover:bg-slate-800 text-xs font-medium flex flex-col items-center gap-1.5 transition">
+                            <i data-lucide="map" class="w-5 h-5"></i>
+                            Standart Coğrafi
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 3. Bölge Filtresi -->
+                <div class="space-y-2">
+                    <label class="text-xs font-medium text-slate-300 flex items-center justify-between">
+                        <span>Coğrafi Bölge Filtresi</span>
+                        <i data-lucide="globe" class="w-3.5 h-3.5 text-slate-400"></i>
+                    </label>
+                    <select id="region-filter" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                        <option value="ALL">Tüm Türkiye (81 İl)</option>
+                        <option value="Marmara">Marmara Bölgesi</option>
+                        <option value="Ege">Ege Bölgesi</option>
+                        <option value="Akdeniz">Akdeniz Bölgesi</option>
+                        <option value="İç Anadolu">İç Anadolu Bölgesi</option>
+                        <option value="Karadeniz">Karadeniz Bölgesi</option>
+                        <option value="Doğu Anadolu">Doğu Anadolu Bölgesi</option>
+                        <option value="Güneydoğu Anadolu">Güneydoğu Anadolu Bölgesi</option>
+                    </select>
+                </div>
+
+                <!-- 4. Renk Paleti ve Ölçekleme -->
+                <div class="space-y-3 pt-2 border-t border-slate-800">
+                    <label class="text-xs font-medium text-slate-300 flex items-center justify-between">
+                        <span>Renklendirme Paleti</span>
+                        <i data-lucide="palette" class="w-3.5 h-3.5 text-slate-400"></i>
+                    </label>
+                    <select id="color-palette" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                        <option value="Spectral">🌈 Spectral (Sıcak - Soğuk)</option>
+                        <option value="Viridis" selected>🟢 Viridis (Ekolojik Modern)</option>
+                        <option value="YlOrRd">🔥 Sarı - Turuncu - Kırmızı</option>
+                        <option value="Blues">💙 Mavi Dereceli</option>
+                        <option value="Magma">🌋 Magma / Sıcak Parlak</option>
+                    </select>
+
+                    <div class="space-y-1 pt-1">
+                        <div class="flex justify-between text-xs text-slate-400">
+                            <span>Kartogram Bükülme Çarpanı</span>
+                            <span id="distortion-val" class="font-mono text-cyan-400">1.0x</span>
+                        </div>
+                        <input type="range" id="distortion-slider" min="0.3" max="2.5" step="0.1" value="1.0" class="w-full accent-cyan-500 bg-slate-800 rounded-lg h-1.5 cursor-pointer">
+                    </div>
+
+                    <div class="flex items-center justify-between pt-2">
+                        <span class="text-xs text-slate-300">İl İsim Etiketleri</span>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="toggle-labels" checked class="sr-only peer">
+                            <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-600"></div>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 5. Özet İstatistik Paneli -->
+                <div class="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
+                    <div class="text-xs font-semibold text-slate-300 flex items-center justify-between border-b border-slate-800 pb-1.5">
+                        <span>İstatistiksel Özet</span>
+                        <i data-lucide="calculator" class="w-3.5 h-3.5 text-cyan-400"></i>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-[11px]">
+                        <div>
+                            <span class="text-slate-500 block">Ortalama (Mean)</span>
+                            <span id="stat-mean" class="font-semibold text-slate-200">-</span>
+                        </div>
+                        <div>
+                            <span class="text-slate-500 block">Medyan (Ortanca)</span>
+                            <span id="stat-median" class="font-semibold text-slate-200">-</span>
+                        </div>
+                        <div>
+                            <span class="text-slate-500 block">En Yüksek (Max)</span>
+                            <span id="stat-max" class="font-semibold text-emerald-400">-</span>
+                        </div>
+                        <div>
+                            <span class="text-slate-500 block">En Düşük (Min)</span>
+                            <span id="stat-min" class="font-semibold text-rose-400">-</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </aside>
+
+        <!-- Center Canvas Area -->
+        <main class="flex-1 relative bg-slate-950 overflow-hidden flex flex-col">
+
+            <!-- Search & Quick Navigation HUD Bar -->
+            <div class="absolute top-4 left-4 z-10 flex items-center gap-2 max-w-sm w-full">
+                <div class="relative w-full glass-panel rounded-xl shadow-2xl">
+                    <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-3"></i>
+                    <input type="text" id="province-search" placeholder="İl ara... (Örn: İstanbul, Konya, Rize)" class="w-full bg-transparent text-xs py-2.5 pl-9 pr-8 text-slate-100 placeholder-slate-500 focus:outline-none">
+                    <button id="clear-search" class="hidden absolute right-2.5 top-2.5 text-slate-400 hover:text-white">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                    <!-- Search Results Dropdown -->
+                    <div id="search-results" class="hidden absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-700 rounded-lg shadow-xl max-h-48 overflow-y-auto z-30"></div>
+                </div>
+                <button id="btn-reset-view" title="Görünümü Sıfırla" class="p-2.5 glass-panel hover:bg-slate-800 text-slate-300 rounded-xl transition border border-slate-700">
+                    <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <!-- Floating Legend Container -->
+            <div id="legend-panel" class="absolute bottom-6 left-4 z-10 glass-panel p-3.5 rounded-xl border border-slate-800 max-w-xs shadow-2xl space-y-2">
+                <div class="flex justify-between items-center text-xs font-semibold text-slate-200">
+                    <span id="legend-title">Nüfus Ölçeği</span>
+                    <span class="text-[10px] text-slate-400">CBS Koroplet</span>
+                </div>
+                <!-- Continuous Color Bar -->
+                <div class="h-3 w-full rounded-md" id="legend-color-bar"></div>
+                <div class="flex justify-between text-[10px] text-slate-400 font-mono" id="legend-labels">
+                    <span id="legend-min">0</span>
+                    <span id="legend-mid">500k</span>
+                    <span id="legend-max">15M</span>
+                </div>
+            </div>
+
+            <!-- Main Interactive SVG Container -->
+            <div id="map-container" class="w-full h-full cursor-grab active:cursor-grabbing">
+                <svg id="cartogram-svg" class="w-full h-full select-none"></svg>
+            </div>
+
+            <!-- Interactive Hover Tooltip -->
+            <div id="tooltip" class="pointer-events-none fixed z-50 hidden glass-panel px-3.5 py-2.5 rounded-xl shadow-2xl border border-slate-700 text-xs space-y-1">
+                <div class="flex items-center justify-between gap-3 border-b border-slate-700 pb-1">
+                    <span id="tt-name" class="font-bold text-sm text-cyan-300">İstanbul</span>
+                    <span id="tt-region" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">Marmara</span>
+                </div>
+                <div class="flex justify-between gap-4 text-slate-300">
+                    <span id="tt-metric-label">Toplam Nüfus:</span>
+                    <span id="tt-metric-val" class="font-bold font-mono text-white">15.655.924</span>
+                </div>
+                <div class="flex justify-between gap-4 text-[11px] text-slate-400">
+                    <span>Türkiye Sıralaması:</span>
+                    <span id="tt-rank" class="font-semibold text-amber-400">1 / 81</span>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Drawer - Detailed Inspector & Analytics -->
+        <aside id="inspector-drawer" class="w-80 lg:w-96 border-l border-slate-800 glass-panel flex flex-col z-10 shrink-0">
+            <!-- Inspector Header -->
+            <div class="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="info" class="w-4 h-4 text-cyan-400"></i>
+                    <h3 class="text-sm font-semibold text-slate-200">İl Detay Analiz Paneli</h3>
+                </div>
+                <span id="selected-province-code" class="text-xs font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">TR-34</span>
+            </div>
+
+            <!-- Detailed Body -->
+            <div class="flex-1 overflow-y-auto p-4 space-y-6">
+
+                <!-- Selected Province Hero Card -->
+                <div id="inspector-hero" class="p-4 rounded-xl bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 space-y-3 relative overflow-hidden">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h2 id="inspect-title" class="text-xl font-bold text-white leading-tight">İstanbul</h2>
+                            <p id="inspect-region" class="text-xs text-cyan-400 font-medium">Marmara Bölgesi</p>
+                        </div>
+                        <span id="inspect-rank-badge" class="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold">
+                            #1 Sırada
+                        </span>
+                    </div>
+
+                    <!-- Primary Metric Card -->
+                    <div class="p-3 bg-slate-950/80 rounded-lg border border-slate-800">
+                        <span id="inspect-metric-name" class="text-[11px] text-slate-400 block">Toplam Nüfus</span>
+                        <div class="text-xl font-extrabold font-mono text-cyan-400 mt-0.5" id="inspect-metric-value">
+                            15.655.924
+                        </div>
+                        <div class="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+                            <div id="inspect-metric-bar" class="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full" style="width: 100%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Secondary Indicators Grid -->
+                    <div class="grid grid-cols-2 gap-2 text-xs pt-1">
+                        <div class="p-2 rounded bg-slate-900/60 border border-slate-800">
+                            <span class="text-[10px] text-slate-500 block">Nüfus Yoğunluğu</span>
+                            <span id="inspect-density" class="font-semibold text-slate-200">3,052 kişi/km²</span>
+                        </div>
+                        <div class="p-2 rounded bg-slate-900/60 border border-slate-800">
+                            <span class="text-[10px] text-slate-500 block">Kişi Başı GSYH</span>
+                            <span id="inspect-gdp" class="font-semibold text-slate-200">$17,420</span>
+                        </div>
+                        <div class="p-2 rounded bg-slate-900/60 border border-slate-800">
+                            <span class="text-[10px] text-slate-500 block">Ortanca Yaş</span>
+                            <span id="inspect-age" class="font-semibold text-slate-200">34.2 yıl</span>
+                        </div>
+                        <div class="p-2 rounded bg-slate-900/60 border border-slate-800">
+                            <span class="text-[10px] text-slate-500 block">Üniversite Mezunu</span>
+                            <span id="inspect-edu" class="font-semibold text-slate-200">%24.8</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Leaderboard Section - Top 5 & Bottom 5 -->
+                <div class="space-y-3">
+                    <h4 class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                        <span>Seçili Metrik Sıralaması (Top 5)</span>
+                        <i data-lucide="trophy" class="w-3.5 h-3.5 text-amber-400"></i>
+                    </h4>
+                    <div id="top-5-list" class="space-y-1.5">
+                        <!-- Top items dynamic rendering -->
+                    </div>
+                </div>
+
+                <!-- Regional Breakdown Chart -->
+                <div class="space-y-3 pt-2 border-t border-slate-800">
+                    <h4 class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                        <span>Bölgesel Toplam Dağılımı</span>
+                        <i data-lucide="pie-chart" class="w-3.5 h-3.5 text-cyan-400"></i>
+                    </h4>
+                    <div id="regional-chart" class="space-y-2">
+                        <!-- Dynamic Region Bars -->
+                    </div>
+                </div>
+
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Comparative Modal Window -->
+    <div id="compare-modal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="glass-panel w-full max-w-4xl rounded-2xl border border-slate-700 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            <!-- Modal Header -->
+            <div class="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="git-compare" class="w-5 h-5 text-cyan-400"></i>
+                    <h3 class="text-base font-bold text-white">İki İli Karşılaştırmalı CBS Analizi</h3>
+                </div>
+                <button id="close-compare-modal" class="p-1 text-slate-400 hover:text-white rounded-lg">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Modal Content -->
+            <div class="p-6 overflow-y-auto space-y-6">
+                <!-- Selectors -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="text-xs font-medium text-slate-400 block mb-1">1. İl Seçimi</label>
+                        <select id="comp-prov-1" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm text-slate-100 focus:outline-none focus:border-cyan-500">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-medium text-slate-400 block mb-1">2. İl Seçimi</label>
+                        <select id="comp-prov-2" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm text-slate-100 focus:outline-none focus:border-cyan-500">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Comparison Cards Grid -->
+                <div id="comp-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Dynamic comparative stats generated via JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Authentic Demographics & Spatial Centroids Dataset for Turkey's 81 Provinces
+        const TURKEY_DATA = [
+            { id: 1, code: "TR-01", name: "Adana", region: "Akdeniz", lat: 37.00, lon: 35.32, area: 13844, population: 2274106, density: 164, gdp: 9850, edu: 18.2, medianAge: 33.1, vehicles: 760000, forest: 39.5, popGrowth: 4.1 },
+            { id: 2, code: "TR-02", name: "Adıyaman", region: "Güneydoğu Anadolu", lat: 37.76, lon: 37.27, area: 7614, population: 604978, density: 79, gdp: 5400, edu: 14.8, medianAge: 29.4, vehicles: 125000, forest: 21.2, popGrowth: -12.5 },
+            { id: 3, code: "TR-03", name: "Afyonkarahisar", region: "Ege", lat: 38.75, lon: 30.54, area: 14016, population: 751344, density: 54, gdp: 7200, edu: 15.1, medianAge: 36.2, vehicles: 260000, forest: 22.1, popGrowth: 3.2 },
+            { id: 4, code: "TR-04", name: "Ağrı", region: "Doğu Anadolu", lat: 39.72, lon: 43.05, area: 11099, population: 511238, density: 46, gdp: 3900, edu: 10.5, medianAge: 24.8, vehicles: 42000, forest: 1.5, popGrowth: -8.1 },
+            { id: 5, code: "TR-05", name: "Amasya", region: "Karadeniz", lat: 40.65, lon: 35.83, area: 5628, population: 339529, density: 60, gdp: 8100, edu: 17.5, medianAge: 38.4, vehicles: 135000, forest: 46.2, popGrowth: 2.1 },
+            { id: 6, code: "TR-06", name: "Ankara", region: "İç Anadolu", lat: 39.93, lon: 32.85, area: 25632, population: 5803482, density: 226, gdp: 16200, edu: 28.6, medianAge: 37.1, vehicles: 2540000, forest: 17.4, popGrowth: 7.8 },
+            { id: 7, code: "TR-07", name: "Antalya", region: "Akdeniz", lat: 36.88, lon: 30.70, area: 20177, population: 2696249, density: 134, gdp: 14100, edu: 21.4, medianAge: 35.8, vehicles: 1380000, forest: 56.8, popGrowth: 15.4 },
+            { id: 8, code: "TR-08", name: "Artvin", region: "Karadeniz", lat: 41.18, lon: 41.82, area: 7393, population: 172356, density: 23, gdp: 8900, edu: 18.9, medianAge: 41.2, vehicles: 45000, forest: 55.3, popGrowth: -2.4 },
+            { id: 9, code: "TR-09", name: "Aydın", region: "Ege", lat: 37.84, lon: 27.84, area: 8116, population: 1148241, density: 141, gdp: 10200, edu: 18.4, medianAge: 39.5, vehicles: 520000, forest: 40.1, popGrowth: 8.2 },
+            { id: 10, code: "TR-10", name: "Balıkesir", region: "Marmara", lat: 39.65, lon: 27.88, area: 14583, population: 1273519, density: 87, gdp: 10800, edu: 17.8, medianAge: 41.6, vehicles: 560000, forest: 45.3, popGrowth: 6.1 },
+            { id: 11, code: "TR-11", name: "Bilecik", region: "Marmara", lat: 40.14, lon: 29.98, area: 4179, population: 228058, density: 55, gdp: 11900, edu: 17.1, medianAge: 37.2, vehicles: 80000, forest: 47.1, popGrowth: 5.2 },
+            { id: 12, code: "TR-12", name: "Bingöl", region: "Doğu Anadolu", lat: 38.88, lon: 40.49, area: 8004, population: 285655, density: 36, gdp: 5100, edu: 13.2, medianAge: 28.5, vehicles: 22000, forest: 32.8, popGrowth: 1.8 },
+            { id: 13, code: "TR-13", name: "Bitlis", region: "Doğu Anadolu", lat: 38.40, lon: 42.11, area: 8294, population: 357286, density: 43, gdp: 4500, edu: 11.8, medianAge: 25.4, vehicles: 26000, forest: 20.4, popGrowth: 3.5 },
+            { id: 14, code: "TR-14", name: "Bolu", region: "Karadeniz", lat: 40.73, lon: 31.61, area: 8313, population: 324789, density: 39, gdp: 12400, edu: 19.3, medianAge: 38.9, vehicles: 130000, forest: 64.7, popGrowth: 4.8 },
+            { id: 15, code: "TR-15", name: "Burdur", region: "Akdeniz", lat: 37.72, lon: 30.28, area: 6887, population: 277452, density: 40, gdp: 9100, edu: 18.5, medianAge: 39.8, vehicles: 155000, forest: 43.2, popGrowth: 2.7 },
+            { id: 16, code: "TR-16", name: "Bursa", region: "Marmara", lat: 40.18, lon: 29.06, area: 10813, population: 3214571, density: 297, gdp: 13800, edu: 20.1, medianAge: 36.8, vehicles: 1120000, forest: 45.2, popGrowth: 9.4 },
+            { id: 17, code: "TR-17", name: "Çanakkale", region: "Marmara", lat: 40.15, lon: 26.41, area: 9817, population: 570499, density: 58, gdp: 11500, edu: 21.2, medianAge: 42.3, vehicles: 260000, forest: 52.8, popGrowth: 7.1 },
+            { id: 18, code: "TR-18", name: "Çankırı", region: "İç Anadolu", lat: 40.60, lon: 33.61, area: 7388, population: 205614, density: 28, gdp: 7400, edu: 14.2, medianAge: 39.1, vehicles: 65000, forest: 28.4, popGrowth: 1.1 },
+            { id: 19, code: "TR-19", name: "Çorum", region: "Karadeniz", lat: 40.55, lon: 34.95, area: 12428, population: 524130, density: 42, gdp: 7900, edu: 15.6, medianAge: 38.7, vehicles: 190000, forest: 37.2, popGrowth: -2.3 },
+            { id: 20, code: "TR-20", name: "Denizli", region: "Ege", lat: 37.77, lon: 29.08, area: 12134, population: 1059082, density: 87, gdp: 11200, edu: 19.4, medianAge: 37.4, vehicles: 470000, forest: 46.8, popGrowth: 5.6 },
+            { id: 21, code: "TR-21", name: "Diyarbakır", region: "Güneydoğu Anadolu", lat: 37.91, lon: 40.24, area: 15272, population: 1818133, density: 119, gdp: 5900, edu: 15.3, medianAge: 26.1, vehicles: 150000, forest: 24.1, popGrowth: 8.9 },
+            { id: 22, code: "TR-22", name: "Edirne", region: "Marmara", lat: 41.67, lon: 26.55, area: 6279, population: 419913, density: 67, gdp: 10400, edu: 19.8, medianAge: 40.9, vehicles: 180000, forest: 19.6, popGrowth: 3.8 },
+            { id: 23, code: "TR-23", name: "Elazığ", region: "Doğu Anadolu", lat: 38.67, lon: 39.22, area: 9383, population: 604411, density: 64, gdp: 7600, edu: 19.1, medianAge: 34.5, vehicles: 145000, forest: 18.2, popGrowth: 4.2 },
+            { id: 24, code: "TR-24", name: "Erzincan", region: "Doğu Anadolu", lat: 39.75, lon: 39.49, area: 11815, population: 243399, density: 21, gdp: 8300, edu: 18.2, medianAge: 37.3, vehicles: 70000, forest: 15.8, popGrowth: 3.1 },
+            { id: 25, code: "TR-25", name: "Erzurum", region: "Doğu Anadolu", lat: 39.90, lon: 41.27, area: 25005, population: 749754, density: 30, gdp: 6800, edu: 17.9, medianAge: 30.2, vehicles: 132000, forest: 9.4, popGrowth: -3.8 },
+            { id: 26, code: "TR-26", name: "Eskişehir", region: "İç Anadolu", lat: 39.77, lon: 30.52, area: 13960, population: 915418, density: 66, gdp: 13500, edu: 26.3, medianAge: 38.2, vehicles: 330000, forest: 26.3, popGrowth: 8.4 },
+            { id: 27, code: "TR-27", name: "Gaziantep", region: "Güneydoğu Anadolu", lat: 37.06, lon: 37.38, area: 6803, population: 2164134, density: 318, gdp: 8700, edu: 14.1, medianAge: 27.2, vehicles: 640000, forest: 17.5, popGrowth: 11.2 },
+            { id: 28, code: "TR-28", name: "Giresun", region: "Karadeniz", lat: 40.91, lon: 38.38, area: 7025, population: 461712, density: 66, gdp: 7100, edu: 16.8, medianAge: 41.8, vehicles: 105000, forest: 35.1, popGrowth: 2.3 },
+            { id: 29, code: "TR-29", name: "Gümüşhane", region: "Karadeniz", lat: 40.46, lon: 39.47, area: 6668, population: 148539, density: 22, gdp: 6900, edu: 17.4, medianAge: 35.6, vehicles: 28000, forest: 26.8, popGrowth: -5.4 },
+            { id: 30, code: "TR-30", name: "Hakkari", region: "Doğu Anadolu", lat: 37.58, lon: 43.73, area: 7095, population: 287625, density: 41, gdp: 4100, edu: 12.1, medianAge: 24.1, vehicles: 10000, forest: 8.2, popGrowth: 1.2 },
+            { id: 31, code: "TR-31", name: "Hatay", region: "Akdeniz", lat: 36.20, lon: 36.16, area: 5524, population: 1544640, density: 280, gdp: 7800, edu: 16.2, medianAge: 32.8, vehicles: 580000, forest: 37.4, popGrowth: -84.2 },
+            { id: 32, code: "TR-32", name: "Isparta", region: "Akdeniz", lat: 37.76, lon: 30.55, area: 8946, population: 445325, density: 50, gdp: 9500, edu: 21.8, medianAge: 37.6, vehicles: 205000, forest: 44.2, popGrowth: 3.1 },
+            { id: 33, code: "TR-33", name: "Mersin", region: "Akdeniz", lat: 36.80, lon: 34.63, area: 16010, population: 1938389, density: 121, gdp: 11100, edu: 19.5, medianAge: 35.4, vehicles: 730000, forest: 53.6, popGrowth: 10.8 },
+            { id: 34, code: "TR-34", name: "İstanbul", region: "Marmara", lat: 41.01, lon: 28.97, area: 5343, population: 15655924, density: 2930, gdp: 18500, edu: 25.2, medianAge: 34.2, vehicles: 5120000, forest: 44.1, popGrowth: -4.3 },
+            { id: 35, code: "TR-35", name: "İzmir", region: "Ege", lat: 38.42, lon: 27.14, area: 11891, population: 4479525, density: 377, gdp: 15100, edu: 24.1, medianAge: 38.4, vehicles: 1720000, forest: 39.2, popGrowth: 6.2 },
+            { id: 36, code: "TR-36", name: "Kars", region: "Doğu Anadolu", lat: 40.60, lon: 43.10, area: 10193, population: 278149, density: 27, gdp: 5800, edu: 14.1, medianAge: 27.8, vehicles: 45000, forest: 3.8, popGrowth: -4.2 },
+            { id: 37, code: "TR-37", name: "Kastamonu", region: "Karadeniz", lat: 41.38, lon: 33.78, area: 13064, population: 388990, density: 30, gdp: 8200, edu: 16.4, medianAge: 42.8, vehicles: 150000, forest: 67.2, popGrowth: 2.8 },
+            { id: 38, code: "TR-38", name: "Kayseri", region: "İç Anadolu", lat: 38.73, lon: 35.48, area: 16970, population: 1441523, density: 85, gdp: 10500, edu: 18.7, medianAge: 33.9, vehicles: 430000, forest: 10.2, popGrowth: 6.5 },
+            { id: 39, code: "TR-39", name: "Kırklareli", region: "Marmara", lat: 41.73, lon: 27.22, area: 6459, population: 377156, density: 58, gdp: 12800, edu: 20.3, medianAge: 40.6, vehicles: 150000, forest: 48.3, popGrowth: 8.9 },
+            { id: 40, code: "TR-40", name: "Kırşehir", region: "İç Anadolu", lat: 39.14, lon: 34.16, area: 6584, population: 247132, density: 38, gdp: 8100, edu: 18.1, medianAge: 38.2, vehicles: 78000, forest: 7.1, popGrowth: 1.9 },
+            { id: 41, code: "TR-41", name: "Kocaeli", region: "Marmara", lat: 40.76, lon: 29.92, area: 3397, population: 2102907, density: 619, gdp: 20100, edu: 21.6, medianAge: 33.8, vehicles: 510000, forest: 42.1, popGrowth: 16.8 },
+            { id: 42, code: "TR-42", name: "Konya", region: "İç Anadolu", lat: 37.87, lon: 32.48, area: 38873, population: 2320645, density: 60, gdp: 10100, edu: 17.6, medianAge: 33.4, vehicles: 840000, forest: 14.5, popGrowth: 9.1 },
+            { id: 43, code: "TR-43", name: "Kütahya", region: "Ege", lat: 39.42, lon: 29.98, area: 11634, population: 575670, density: 49, gdp: 8800, edu: 16.5, medianAge: 39.2, vehicles: 230000, forest: 56.4, popGrowth: -1.2 },
+            { id: 44, code: "TR-44", name: "Malatya", region: "Doğu Anadolu", lat: 38.35, lon: 38.31, area: 12259, population: 741903, density: 61, gdp: 6700, edu: 17.8, medianAge: 33.6, vehicles: 210000, forest: 15.2, popGrowth: -82.4 },
+            { id: 45, code: "TR-45", name: "Manisa", region: "Ege", lat: 38.61, lon: 27.43, area: 13339, population: 1468279, density: 110, gdp: 11800, edu: 16.9, medianAge: 37.8, vehicles: 680000, forest: 40.2, popGrowth: 4.2 },
+            { id: 46, code: "TR-46", name: "Kahramanmaraş", region: "Akdeniz", lat: 37.58, lon: 36.93, area: 14520, population: 1116618, density: 77, gdp: 7200, edu: 15.2, medianAge: 29.8, vehicles: 270000, forest: 35.8, popGrowth: -52.1 },
+            { id: 47, code: "TR-47", name: "Mardin", region: "Güneydoğu Anadolu", lat: 37.31, lon: 40.73, area: 8780, population: 888874, density: 101, gdp: 5800, edu: 12.9, medianAge: 25.1, vehicles: 155000, forest: 8.9, popGrowth: 18.2 },
+            { id: 48, code: "TR-48", name: "Muğla", region: "Ege", lat: 37.21, lon: 28.36, area: 12654, population: 1066736, density: 84, gdp: 14800, edu: 22.4, medianAge: 40.1, vehicles: 610000, forest: 68.2, popGrowth: 17.5 },
+            { id: 49, code: "TR-49", name: "Muş", region: "Doğu Anadolu", lat: 38.73, lon: 41.49, area: 8650, population: 399879, density: 46, gdp: 4200, edu: 11.2, medianAge: 23.9, vehicles: 35000, forest: 12.4, popGrowth: 1.1 },
+            { id: 50, code: "TR-50", name: "Nevşehir", region: "İç Anadolu", lat: 38.62, lon: 34.71, area: 5485, population: 315994, density: 58, gdp: 9200, edu: 18.3, medianAge: 37.1, vehicles: 140000, forest: 3.2, popGrowth: 5.8 },
+            { id: 51, code: "TR-51", name: "Niğde", region: "İç Anadolu", lat: 37.96, lon: 34.68, area: 7234, population: 377080, density: 52, gdp: 7900, edu: 15.8, medianAge: 34.6, vehicles: 125000, forest: 7.8, popGrowth: 12.1 },
+            { id: 52, code: "TR-52", name: "Ordu", region: "Karadeniz", lat: 40.98, lon: 37.88, area: 5861, population: 775800, density: 132, gdp: 7500, edu: 16.1, medianAge: 40.2, vehicles: 170000, forest: 47.9, popGrowth: 14.2 },
+            { id: 53, code: "TR-53", name: "Rize", region: "Karadeniz", lat: 41.02, lon: 40.52, area: 3835, population: 350506, density: 91, gdp: 8600, edu: 18.9, medianAge: 38.8, vehicles: 92000, forest: 44.3, popGrowth: 12.8 },
+            { id: 54, code: "TR-54", name: "Sakarya", region: "Marmara", lat: 40.77, lon: 30.40, area: 4821, population: 1098115, density: 228, gdp: 12300, edu: 18.7, medianAge: 36.1, vehicles: 340000, forest: 45.1, popGrowth: 16.1 },
+            { id: 55, code: "TR-55", name: "Samsun", region: "Karadeniz", lat: 41.29, lon: 36.33, area: 9725, population: 1377546, density: 142, gdp: 9400, edu: 18.6, medianAge: 37.9, vehicles: 420000, forest: 38.1, popGrowth: 6.4 },
+            { id: 56, code: "TR-56", name: "Siirt", region: "Güneydoğu Anadolu", lat: 37.93, lon: 41.94, area: 5406, population: 331980, density: 61, gdp: 4800, edu: 13.8, medianAge: 25.2, vehicles: 24000, forest: 33.2, popGrowth: 2.1 },
+            { id: 57, code: "TR-57", name: "Sinop", region: "Karadeniz", lat: 42.02, lon: 35.15, area: 5862, population: 220799, density: 38, gdp: 7800, edu: 16.5, medianAge: 43.1, vehicles: 70000, forest: 65.2, popGrowth: 8.2 },
+            { id: 58, code: "TR-58", name: "Sivas", region: "İç Anadolu", lat: 39.75, lon: 37.01, area: 28164, population: 650401, density: 23, gdp: 8100, edu: 17.2, medianAge: 37.8, vehicles: 185000, forest: 18.9, popGrowth: 12.5 },
+            { id: 59, code: "TR-59", name: "Tekirdağ", region: "Marmara", lat: 40.98, lon: 27.51, area: 6313, population: 1167059, density: 185, gdp: 16800, edu: 19.8, medianAge: 36.2, vehicles: 310000, forest: 16.3, font: 21.2, popGrowth: 21.4 },
+            { id: 60, code: "TR-60", name: "Tokat", region: "Karadeniz", lat: 40.31, lon: 36.55, area: 10042, population: 606934, density: 60, gdp: 6800, edu: 16.1, medianAge: 38.4, vehicles: 200000, forest: 47.3, popGrowth: 17.8 },
+            { id: 61, code: "TR-61", name: "Trabzon", region: "Karadeniz", lat: 41.00, lon: 39.72, area: 4662, population: 824352, density: 177, gdp: 9100, edu: 21.4, medianAge: 38.6, vehicles: 240000, forest: 43.8, popGrowth: 7.2 },
+            { id: 62, code: "TR-62", name: "Tunceli", region: "Doğu Anadolu", lat: 39.10, lon: 39.54, area: 7774, population: 89317, density: 11, gdp: 8900, edu: 24.1, medianAge: 39.6, vehicles: 12000, forest: 36.4, popGrowth: 11.2 },
+            { id: 63, code: "TR-63", name: "Şanlıurfa", region: "Güneydoğu Anadolu", lat: 37.16, lon: 38.79, area: 19451, population: 2213964, density: 114, gdp: 5100, edu: 11.8, medianAge: 21.2, vehicles: 280000, forest: 1.2, popGrowth: 21.8 },
+            { id: 64, code: "TR-64", name: "Uşak", region: "Ege", lat: 38.68, lon: 29.40, area: 5555, population: 377001, density: 68, gdp: 9700, edu: 17.1, medianAge: 38.1, vehicles: 160000, forest: 41.5, popGrowth: 3.4 },
+            { id: 65, code: "TR-65", name: "Van", region: "Doğu Anadolu", lat: 38.50, lon: 43.38, area: 19069, population: 1127612, density: 59, gdp: 4300, edu: 13.5, medianAge: 23.4, vehicles: 85000, forest: 2.1, popGrowth: -1.2 },
+            { id: 66, code: "TR-66", name: "Yozgat", region: "İç Anadolu", lat: 39.82, lon: 34.81, area: 13690, population: 418442, density: 31, gdp: 7200, edu: 14.8, medianAge: 39.2, vehicles: 120000, forest: 19.1, popGrowth: -0.8 },
+            { id: 67, code: "TR-67", name: "Zonguldak", region: "Karadeniz", lat: 41.45, lon: 31.79, area: 3342, population: 591492, density: 177, gdp: 10400, edu: 17.3, medianAge: 41.1, vehicles: 170000, forest: 61.8, popGrowth: 4.8 },
+            { id: 68, code: "TR-68", name: "Aksaray", region: "İç Anadolu", lat: 38.37, lon: 34.03, area: 7659, population: 438504, density: 57, gdp: 8400, edu: 15.6, medianAge: 33.8, vehicles: 150000, forest: 3.8, popGrowth: 12.8 },
+            { id: 69, code: "TR-69", name: "Bayburt", region: "Karadeniz", lat: 40.26, lon: 40.22, area: 3746, population: 86047, density: 23, gdp: 6200, edu: 17.8, medianAge: 32.1, vehicles: 18000, forest: 2.5, popGrowth: 18.2 },
+            { id: 70, code: "TR-70", name: "Karaman", region: "İç Anadolu", lat: 37.18, lon: 33.22, area: 8678, population: 263960, density: 30, gdp: 10200, edu: 18.2, medianAge: 36.1, vehicles: 105000, forest: 30.1, popGrowth: 11.1 },
+            { id: 71, code: "TR-71", name: "Kırıkkale", region: "İç Anadolu", lat: 39.84, lon: 33.51, area: 4365, population: 285744, density: 65, gdp: 9100, edu: 19.1, medianAge: 37.9, vehicles: 75000, forest: 13.2, popGrowth: 3.8 },
+            { id: 72, code: "TR-72", name: "Batman", region: "Güneydoğu Anadolu", lat: 37.88, lon: 41.13, area: 4477, population: 647205, density: 145, gdp: 5600, edu: 14.2, medianAge: 24.8, vehicles: 60000, forest: 15.1, popGrowth: 19.4 },
+            { id: 73, code: "TR-73", name: "Şırnak", region: "Güneydoğu Anadolu", lat: 37.52, lon: 42.45, area: 7078, population: 561576, density: 79, gdp: 4700, edu: 11.9, medianAge: 22.8, vehicles: 38000, forest: 34.2, popGrowth: 7.2 },
+            { id: 74, code: "TR-74", name: "Bartın", region: "Karadeniz", lat: 41.63, lon: 32.33, area: 2330, population: 207238, density: 89, gdp: 8300, edu: 17.2, medianAge: 40.8, vehicles: 60000, forest: 58.9, popGrowth: 19.2 },
+            { id: 75, code: "TR-75", name: "Ardahan", region: "Doğu Anadolu", lat: 41.11, lon: 42.70, area: 4937, population: 92819, density: 19, gdp: 5900, edu: 15.2, medianAge: 34.2, vehicles: 20000, forest: 8.5, popGrowth: 3.2 },
+            { id: 76, code: "TR-76", name: "Iğdır", region: "Doğu Anadolu", lat: 39.92, lon: 44.04, area: 3664, population: 209738, density: 57, gdp: 5800, edu: 14.8, medianAge: 26.8, vehicles: 32000, forest: 0.8, popGrowth: 15.1 },
+            { id: 77, code: "TR-77", name: "Yalova", region: "Marmara", lat: 40.65, lon: 29.27, area: 798, population: 304780, density: 382, gdp: 15200, edu: 22.1, medianAge: 38.9, vehicles: 85000, forest: 59.2, popGrowth: 28.1 },
+            { id: 78, code: "TR-78", name: "Karabük", region: "Karadeniz", lat: 41.20, lon: 32.62, area: 4125, population: 255242, density: 62, gdp: 9800, edu: 21.1, medianAge: 39.4, vehicles: 72000, forest: 68.8, popGrowth: 11.2 },
+            { id: 79, code: "TR-79", name: "Kilis", region: "Güneydoğu Anadolu", lat: 36.71, lon: 37.11, area: 1412, population: 155179, density: 110, gdp: 5200, edu: 14.1, medianAge: 28.9, vehicles: 55000, forest: 14.8, popGrowth: 22.8 },
+            { id: 80, code: "TR-80", name: "Osmaniye", region: "Akdeniz", lat: 37.07, lon: 36.25, area: 3320, population: 557781, density: 168, gdp: 7400, edu: 16.8, medianAge: 32.1, vehicles: 195000, forest: 42.1, popGrowth: -21.4 },
+            { id: 81, code: "TR-81", name: "Düzce", region: "Karadeniz", lat: 40.84, lon: 31.16, area: 2492, population: 409865, density: 164, gdp: 10200, edu: 17.9, medianAge: 36.4, vehicles: 132000, forest: 52.1, popGrowth: 11.8 }
+        ];
+
+        // Metric Metadata Definitions
+        const METRICS = {
+            population: { name: "Toplam Nüfus", unit: "kişi", format: d => d.toLocaleString('tr-TR'), desc: "2023 TÜİK Adrese Dayalı Nüfus Kayıt Sistemi verilerine göre il nüfusu." },
+            density: { name: "Nüfus Yoğunluğu", unit: "kişi/km²", format: d => d.toLocaleString('tr-TR') + " /km²", desc: "Kilometrekareye düşen ortalama insan sayısı." },
+            gdp: { name: "Kişi Başına GSYH", unit: "USD $", format: d => "$" + d.toLocaleString('tr-TR'), desc: "İl düzeyinde kişi başına düşen Gayrisafi Yurtiçi Hasıla ($)." },
+            edu: { name: "Yükseköğretim Mezunu Oranı", unit: "%", format: d => "%" + d.toFixed(1), desc: "25 yaş üstü lisans ve lisansüstü mezun nüfus oranı." },
+            medianAge: { name: "Ortanca Yaş", unit: "yıl", format: d => d.toFixed(1) + " yıl", desc: "Nüfusu yaşa göre iki eşit parçaya bölen yaş sınırı." },
+            vehicles: { name: "Motorlu Kara Taşıtı", unit: "araç", format: d => d.toLocaleString('tr-TR'), desc: "İle kayıtlı toplam motorlu kara taşıtı sayısı." },
+            forest: { name: "Orman Varlığı Oranı", unit: "%", format: d => "%" + d.toFixed(1), desc: "İl yüzölçümünün orman örtüsü ile kaplı alanı." },
+            popGrowth: { name: "Yıllık Nüfus Artış Hızı", unit: "‰", format: d => "‰" + d.toFixed(1), desc: "İlin binde olarak yıllık nüfus değişim oranı." }
+        };
+
+        // Application State Management
+        let appState = {
+            metric: 'population',
+            mode: 'dorling', // dorling, demers, continuous, geographic
+            region: 'ALL',
+            palette: 'Viridis',
+            distortion: 1.0,
+            showLabels: true,
+            selectedProvince: TURKEY_DATA.find(p => p.id === 34), // Default Istanbul
+            searchQuery: ''
+        };
+
+        // D3 Visual Elements & Map Variables
+        let svg, gMap, transformGroup, simulation;
+        let mapWidth, mapHeight;
+        let projection;
+
+        function initGISApp() {
+            const container = d3.select("#map-container");
+            const rect = container.node().getBoundingClientRect();
+            mapWidth = rect.width;
+            mapHeight = rect.height;
+
+            // Configure Turkey Specific Mercator Projection
+            projection = d3.geoMercator()
+                .center([35.2, 39.0]) // Turkey Geographic Center
+                .scale(Math.min(mapWidth * 3.6, mapHeight * 7.0))
+                .translate([mapWidth / 2, mapHeight / 2]);
+
+            // Create Base SVG Elements
+            svg = d3.select("#cartogram-svg")
+                .attr("viewBox", `0 0 ${mapWidth} ${mapHeight}`);
+
+            // Zoom & Pan Behavior
+            const zoom = d3.zoom()
+                .scaleExtent([0.8, 8])
+                .on("zoom", (event) => {
+                    transformGroup.attr("transform", event.transform);
+                });
+
+            svg.call(zoom);
+
+            transformGroup = svg.append("g").attr("id", "main-transform");
+            gMap = transformGroup.append("g").attr("id", "cartogram-layer");
+
+            // Attach UI Event Listeners
+            setupEventListeners();
+            
+            // Populate Comparative Selectors
+            populateCompareDropdowns();
+
+            // Initial Render
+            renderCartogram();
+            updateInspector();
+            updateStatsSummary();
+            
+            // Re-render on window resize
+            window.addEventListener('resize', () => {
+                const r = container.node().getBoundingClientRect();
+                mapWidth = r.width;
+                mapHeight = r.height;
+                svg.attr("viewBox", `0 0 ${mapWidth} ${mapHeight}`);
+                projection.scale(Math.min(mapWidth * 3.6, mapHeight * 7.0)).translate([mapWidth / 2, mapHeight / 2]);
+                renderCartogram();
+            });
+
+            // Initialize Lucide Icons
+            lucide.createIcons();
+        }
+
+        function getColorScale(dataValues) {
+            const minVal = d3.min(dataValues);
+            const maxVal = d3.max(dataValues);
+
+            let interpolator;
+            switch(appState.palette) {
+                case 'Spectral': interpolator = d3.interpolateSpectral; break;
+                case 'YlOrRd': interpolator = d3.interpolateYlOrRd; break;
+                case 'Blues': interpolator = d3.interpolateBlues; break;
+                case 'Magma': interpolator = d3.interpolateMagma; break;
+                default: interpolator = d3.interpolateViridis; break;
+            }
+
+            // Reverse spectral so warm colors denote higher values
+            if (appState.palette === 'Spectral') {
+                return d3.scaleSequential(d => interpolator(1 - d)).domain([minVal, maxVal]);
+            }
+            return d3.scaleSequential(interpolator).domain([minVal, maxVal]);
+        }
+
+        function updateLegend(colorScale, minVal, maxVal) {
+            const m = METRICS[appState.metric];
+            d3.select("#legend-title").text(`${m.name} (${m.unit})`);
+
+            // Gradient legend bar
+            const colorBar = d3.select("#legend-color-bar");
+            let stops = [];
+            for (let i = 0; i <= 100; i += 10) {
+                const val = minVal + (maxVal - minVal) * (i / 100);
+                stops.push(colorScale(val));
+            }
+            colorBar.style("background", `linear-gradient(to right, ${stops.join(',')})`);
+
+            d3.select("#legend-min").text(m.format(minVal));
+            d3.select("#legend-mid").text(m.format((minVal + maxVal) / 2));
+            d3.select("#legend-max").text(m.format(maxVal));
+        }
+
+        function renderCartogram() {
+            if (simulation) simulation.stop();
+
+            // Filter data by region
+            const filteredData = TURKEY_DATA.filter(d => appState.region === 'ALL' || d.region === appState.region);
+            const metricValues = filteredData.map(d => d[appState.metric]);
+            const colorScale = getColorScale(metricValues);
+
+            const minVal = d3.min(metricValues);
+            const maxVal = d3.max(metricValues);
+
+            updateLegend(colorScale, minVal, maxVal);
+
+            // Calculate Projected Geographic Centroids
+            const nodes = filteredData.map(d => {
+                const [x, y] = projection([d.lon, d.lat]);
+                const val = Math.max(d[appState.metric], 0.0001);
+                
+                // Size scaling factor for circles/squares
+                const normVal = (val - minVal) / (maxVal - minVal || 1);
+                const baseRadius = 12 + normVal * 34 * appState.distortion;
+
+                return {
+                    ...d,
+                    origX: x,
+                    origY: y,
+                    x: x,
+                    y: y,
+                    r: baseRadius,
+                    val: val
+                };
+            });
+
+            // Clear previous layer contents
+            gMap.selectAll("*").remove();
+
+            if (appState.mode === 'dorling' || appState.mode === 'demers') {
+                // Run D3 Force Simulation to resolve overlapping circles/squares
+                simulation = d3.forceSimulation(nodes)
+                    .force("cx", d3.forceX(d => d.origX).strength(0.2))
+                    .force("cy", d3.forceY(d => d.origY).strength(0.2))
+                    .force("collide", d3.forceCollide(d => d.r + 2).iterations(4))
+                    .stop();
+
+                for (let i = 0; i < 120; ++i) simulation.tick();
+
+                // Draw Elements
+                const nodeGroup = gMap.selectAll(".cartogram-node-group")
+                    .data(nodes, d => d.id)
+                    .enter()
+                    .append("g")
+                    .attr("class", "cartogram-node-group")
+                    .attr("transform", d => `translate(${d.x}, ${d.y})`);
+
+                if (appState.mode === 'dorling') {
+                    nodeGroup.append("circle")
+                        .attr("class", "cartogram-node")
+                        .attr("r", d => d.r)
+                        .attr("fill", d => colorScale(d.val))
+                        .attr("stroke", d => d.id === appState.selectedProvince.id ? "#38bdf8" : "#0f172a")
+                        .attr("stroke-width", d => d.id === appState.selectedProvince.id ? 3 : 1.5);
+                } else {
+                    // Demers Square Cartogram
+                    nodeGroup.append("rect")
+                        .attr("class", "cartogram-node")
+                        .attr("x", d => -d.r)
+                        .attr("y", d => -d.r)
+                        .attr("width", d => d.r * 2)
+                        .attr("height", d => d.r * 2)
+                        .attr("rx", 4)
+                        .attr("fill", d => colorScale(d.val))
+                        .attr("stroke", d => d.id === appState.selectedProvince.id ? "#38bdf8" : "#0f172a")
+                        .attr("stroke-width", d => d.id === appState.selectedProvince.id ? 3 : 1.5);
+                }
+
+                // Add Labels
+                if (appState.showLabels) {
+                    nodeGroup.append("text")
+                        .attr("class", "cartogram-label")
+                        .attr("text-anchor", "middle")
+                        .attr("dy", ".35em")
+                        .attr("fill", "#ffffff")
+                        .attr("font-size", d => Math.min(Math.max(d.r * 0.5, 9), 14) + "px")
+                        .text(d => d.r > 10 ? d.name : "");
+                }
+
+                // Attach Interactions
+                attachInteractions(nodeGroup);
+
+            } else if (appState.mode === 'continuous' || appState.mode === 'geographic') {
+                // Continuous Area Distortion / Geographic Voronoi-like boundary polygons
+                const voronoi = d3.Delaunay.from(nodes, d => d.origX, d => d.origY).voronoi([0, 0, mapWidth, mapHeight]);
+
+                const polygonGroup = gMap.selectAll(".cartogram-polygon")
+                    .data(nodes, d => d.id)
+                    .enter()
+                    .append("g")
+                    .attr("class", "cartogram-node-group");
+
+                polygonGroup.append("path")
+                    .attr("class", "cartogram-node")
+                    .attr("d", (d, i) => {
+                        const cell = voronoi.cellPolygon(i);
+                        if (!cell) return "";
+                        
+                        if (appState.mode === 'geographic') {
+                            return "M" + cell.map(p => p.join(",")).join("L") + "Z";
+                        } else {
+                            // Deform cell vertices towards/away from centroid based on relative metric intensity
+                            const normFactor = (d.val - minVal) / (maxVal - minVal || 1);
+                            const scale = 0.6 + normFactor * 0.9 * appState.distortion;
+                            
+                            const deformedPoints = cell.map(pt => {
+                                const vx = pt[0] - d.origX;
+                                const vy = pt[1] - d.origY;
+                                return [d.origX + vx * scale, d.origY + vy * scale];
+                            });
+                            return "M" + deformedPoints.map(p => p.join(",")).join("L") + "Z";
+                        }
+                    })
+                    .attr("fill", d => colorScale(d.val))
+                    .attr("stroke", d => d.id === appState.selectedProvince.id ? "#38bdf8" : "#0f172a")
+                    .attr("stroke-width", d => d.id === appState.selectedProvince.id ? 3 : 1);
+
+                if (appState.showLabels) {
+                    polygonGroup.append("text")
+                        .attr("class", "cartogram-label")
+                        .attr("x", d => d.origX)
+                        .attr("y", d => d.origY)
+                        .attr("text-anchor", "middle")
+                        .attr("fill", "#ffffff")
+                        .attr("font-size", "10px")
+                        .text(d => d.name);
+                }
+
+                attachInteractions(polygonGroup);
+            }
+        }
+
+        function attachInteractions(selection) {
+            const tooltip = d3.select("#tooltip");
+
+            selection
+                .on("mouseover", (event, d) => {
+                    tooltip.classed("hidden", false);
+                    d3.select("#tt-name").text(d.name);
+                    d3.select("#tt-region").text(d.region);
+                    d3.select("#tt-metric-label").text(METRICS[appState.metric].name + ":");
+                    d3.select("#tt-metric-val").text(METRICS[appState.metric].format(d[appState.metric]));
+
+                    // Rank calculation
+                    const sorted = [...TURKEY_DATA].sort((a,b) => b[appState.metric] - a[appState.metric]);
+                    const rank = sorted.findIndex(item => item.id === d.id) + 1;
+                    d3.select("#tt-rank").text(`${rank} / 81`);
+                })
+                .on("mousemove", (event) => {
+                    tooltip
+                        .style("left", (event.clientX + 15) + "px")
+                        .style("top", (event.clientY + 15) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.classed("hidden", true);
+                })
+                .on("click", (event, d) => {
+                    appState.selectedProvince = d;
+                    renderCartogram();
+                    updateInspector();
+                });
+        }
+
+        function updateInspector() {
+            const p = appState.selectedProvince;
+            if (!p) return;
+
+            d3.select("#selected-province-code").text(p.code);
+            d3.select("#inspect-title").text(p.name);
+            d3.select("#inspect-region").text(`${p.region} Bölgesi`);
+
+            // Metric Value
+            const m = METRICS[appState.metric];
+            d3.select("#inspect-metric-name").text(m.name);
+            d3.select("#inspect-metric-value").text(m.format(p[appState.metric]));
+
+            // Rank
+            const sorted = [...TURKEY_DATA].sort((a,b) => b[appState.metric] - a[appState.metric]);
+            const rank = sorted.findIndex(item => item.id === p.id) + 1;
+            d3.select("#inspect-rank-badge").text(`#${rank} Sırada`);
+
+            // Progress Bar Ratio
+            const maxVal = d3.max(TURKEY_DATA, d => d[appState.metric]);
+            const pct = Math.min(100, Math.max(5, (p[appState.metric] / maxVal) * 100));
+            d3.select("#inspect-metric-bar").style("width", pct + "%");
+
+            // Secondary Details
+            d3.select("#inspect-density").text(`${p.density.toLocaleString('tr-TR')} kişi/km²`);
+            d3.select("#inspect-gdp").text(`$${p.gdp.toLocaleString('tr-TR')}`);
+            d3.select("#inspect-age").text(`${p.medianAge} yıl`);
+            d3.select("#inspect-edu").text(`%${p.edu}`);
+
+            // Populate Top 5 Leaderboard
+            const top5List = d3.select("#top-5-list");
+            top5List.html("");
+
+            sorted.slice(0, 5).forEach((item, idx) => {
+                const row = top5List.append("div")
+                    .attr("class", `p-2 rounded-lg flex items-center justify-between text-xs cursor-pointer transition ${item.id === p.id ? 'bg-cyan-950/80 border border-cyan-800' : 'bg-slate-900/60 hover:bg-slate-800'}`)
+                    .on("click", () => {
+                        appState.selectedProvince = item;
+                        renderCartogram();
+                        updateInspector();
+                    });
+
+                row.html(`
+                    <div class="flex items-center gap-2">
+                        <span class="w-5 h-5 rounded-full ${idx === 0 ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-400'} flex items-center justify-center font-bold text-[10px]">
+                            ${idx + 1}
+                        </span>
+                        <span class="font-medium text-slate-200">${item.name}</span>
+                    </div>
+                    <span class="font-mono text-cyan-400 font-semibold">${m.format(item[appState.metric])}</span>
+                `);
+            });
+
+            // Update Regional Breakdown Chart
+            updateRegionalChart();
+        }
+
+        function updateStatsSummary() {
+            const values = TURKEY_DATA.map(d => d[appState.metric]);
+            const mean = d3.mean(values);
+            const median = d3.median(values);
+            const max = d3.max(values);
+            const min = d3.min(values);
+
+            const m = METRICS[appState.metric];
+            d3.select("#stat-mean").text(m.format(mean));
+            d3.select("#stat-median").text(m.format(median));
+            d3.select("#stat-max").text(m.format(max));
+            d3.select("#stat-min").text(m.format(min));
+        }
+
+        function updateRegionalChart() {
+            const chart = d3.select("#regional-chart");
+            chart.html("");
+
+            // Group by region
+            const regions = d3.group(TURKEY_DATA, d => d.region);
+            const regionSums = Array.from(regions, ([key, values]) => {
+                return {
+                    region: key,
+                    total: d3.sum(values, v => v[appState.metric]),
+                    avg: d3.mean(values, v => v[appState.metric])
+                };
+            }).sort((a,b) => b.total - a.total);
+
+            const maxRegTotal = d3.max(regionSums, r => r.total);
+            const m = METRICS[appState.metric];
+
+            regionSums.forEach(r => {
+                const widthPct = (r.total / maxRegTotal) * 100;
+                chart.append("div").html(`
+                    <div class="text-[11px] flex justify-between text-slate-400 mb-0.5">
+                        <span>${r.region}</span>
+                        <span class="font-mono text-slate-200">${m.format(r.total)}</span>
+                    </div>
+                    <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
+                        <div class="bg-gradient-to-r from-cyan-600 to-blue-500 h-full rounded-full" style="width: ${widthPct}%"></div>
+                    </div>
+                `);
+            });
+        }
+
+        function populateCompareDropdowns() {
+            const sel1 = d3.select("#comp-prov-1");
+            const sel2 = d3.select("#comp-prov-2");
+
+            sel1.html("");
+            sel2.html("");
+
+            TURKEY_DATA.forEach(p => {
+                sel1.append("option").attr("value", p.id).text(`${p.code} - ${p.name}`);
+                sel2.append("option").attr("value", p.id).text(`${p.code} - ${p.name}`);
+            });
+
+            sel1.property("value", 34); // Istanbul
+            sel2.property("value", 6);  // Ankara
+
+            renderComparisonGrid();
+
+            sel1.on("change", renderComparisonGrid);
+            sel2.on("change", renderComparisonGrid);
+        }
+
+        function renderComparisonGrid() {
+            const id1 = parseInt(d3.select("#comp-prov-1").property("value"));
+            const id2 = parseInt(d3.select("#comp-prov-2").property("value"));
+
+            const p1 = TURKEY_DATA.find(p => p.id === id1);
+            const p2 = TURKEY_DATA.find(p => p.id === id2);
+
+            if (!p1 || !p2) return;
+
+            const grid = d3.select("#comp-grid");
+            grid.html("");
+
+            function buildCard(p) {
+                return `
+                    <div class="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+                        <div class="border-b border-slate-800 pb-2 flex justify-between items-center">
+                            <div>
+                                <h3 class="text-lg font-bold text-white">${p.name}</h3>
+                                <p class="text-xs text-cyan-400">${p.region} Bölgesi</p>
+                            </div>
+                            <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">${p.code}</span>
+                        </div>
+                        <div class="space-y-2 text-xs">
+                            <div class="flex justify-between p-2 rounded bg-slate-950/60">
+                                <span class="text-slate-400">Toplam Nüfus:</span>
+                                <span class="font-bold text-cyan-400 font-mono">${p.population.toLocaleString('tr-TR')}</span>
+                            </div>
+                            <div class="flex justify-between p-2 rounded bg-slate-950/60">
+                                <span class="text-slate-400">Nüfus Yoğunluğu:</span>
+                                <span class="font-semibold text-slate-200">${p.density} kişi/km²</span>
+                            </div>
+                            <div class="flex justify-between p-2 rounded bg-slate-950/60">
+                                <span class="text-slate-400">Kişi Başı GSYH:</span>
+                                <span class="font-semibold text-emerald-400">$${p.gdp.toLocaleString('tr-TR')}</span>
+                            </div>
+                            <div class="flex justify-between p-2 rounded bg-slate-950/60">
+                                <span class="text-slate-400">Ortanca Yaş:</span>
+                                <span class="font-semibold text-slate-200">${p.medianAge} yıl</span>
+                            </div>
+                            <div class="flex justify-between p-2 rounded bg-slate-950/60">
+                                <span class="text-slate-400">Yükseköğretim %:</span>
+                                <span class="font-semibold text-slate-200">%${p.edu}</span>
+                            </div>
+                            <div class="flex justify-between p-2 rounded bg-slate-950/60">
+                                <span class="text-slate-400">Motorlu Taşıt:</span>
+                                <span class="font-semibold text-slate-200">${p.vehicles.toLocaleString('tr-TR')}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            grid.html(buildCard(p1) + buildCard(p2));
+        }
+
+        function setupEventListeners() {
+            // Metric Dropdown
+            d3.select("#metric-select").on("change", function() {
+                appState.metric = this.value;
+                d3.select("#metric-desc").text(METRICS[appState.metric].desc);
+                renderCartogram();
+                updateInspector();
+                updateStatsSummary();
+            });
+
+            // Cartogram Mode Buttons
+            d3.selectAll(".mode-btn").on("click", function() {
+                d3.selectAll(".mode-btn")
+                    .classed("active bg-cyan-950/80 border-cyan-500 text-cyan-300", false)
+                    .classed("bg-slate-900 border-slate-800 text-slate-400", true);
+
+                d3.select(this)
+                    .classed("active bg-cyan-950/80 border-cyan-500 text-cyan-300", true)
+                    .classed("bg-slate-900 border-slate-800 text-slate-400", false);
+
+                appState.mode = this.getAttribute("data-mode");
+                renderCartogram();
+            });
+
+            // Region Filter
+            d3.select("#region-filter").on("change", function() {
+                appState.region = this.value;
+                renderCartogram();
+            });
+
+            // Palette
+            d3.select("#color-palette").on("change", function() {
+                appState.palette = this.value;
+                renderCartogram();
+            });
+
+            // Distortion Slider
+            d3.select("#distortion-slider").on("input", function() {
+                appState.distortion = parseFloat(this.value);
+                d3.select("#distortion-val").text(appState.distortion.toFixed(1) + "x");
+                renderCartogram();
+            });
+
+            // Toggle Labels
+            d3.select("#toggle-labels").on("change", function() {
+                appState.showLabels = this.checked;
+                renderCartogram();
+            });
+
+            // Reset Zoom / View Button
+            d3.select("#btn-reset-view").on("click", () => {
+                svg.transition().duration(750).call(
+                    d3.zoom().transform,
+                    d3.zoomIdentity
+                );
+            });
+
+            // Search Autocomplete
+            const searchInput = d3.select("#province-search");
+            const searchResults = d3.select("#search-results");
+            const clearBtn = d3.select("#clear-search");
+
+            searchInput.on("input", function() {
+                const query = this.value.trim().toLowerCase();
+                if (!query) {
+                    searchResults.classed("hidden", true);
+                    clearBtn.classed("hidden", true);
+                    return;
+                }
+
+                clearBtn.classed("hidden", false);
+                const matches = TURKEY_DATA.filter(p => p.name.toLowerCase().includes(query));
+
+                if (matches.length > 0) {
+                    searchResults.classed("hidden", false).html("");
+                    matches.forEach(p => {
+                        searchResults.append("div")
+                            .attr("class", "p-2 hover:bg-slate-800 cursor-pointer text-xs flex justify-between border-b border-slate-800/50")
+                            .html(`<span>${p.name}</span><span class="text-slate-500 font-mono">${p.code}</span>`)
+                            .on("click", () => {
+                                appState.selectedProvince = p;
+                                searchInput.property("value", p.name);
+                                searchResults.classed("hidden", true);
+                                renderCartogram();
+                                updateInspector();
+                            });
+                    });
+                } else {
+                    searchResults.classed("hidden", false).html('<div class="p-2 text-xs text-slate-500">Sonuç bulunamadı</div>');
+                }
+            });
+
+            clearBtn.on("click", () => {
+                searchInput.property("value", "");
+                searchResults.classed("hidden", true);
+                clearBtn.classed("hidden", true);
+            });
+
+            // Comparison Modal Controls
+            d3.select("#btn-compare-modal").on("click", () => {
+                d3.select("#compare-modal").classed("hidden", false);
+            });
+            d3.select("#close-compare-modal").on("click", () => {
+                d3.select("#compare-modal").classed("hidden", true);
+            });
+
+            // Export SVG map image
+            d3.select("#btn-export-svg").on("click", () => {
+                const svgNode = document.getElementById("cartogram-svg");
+                const serializer = new XMLSerializer();
+                const svgString = serializer.serializeToString(svgNode);
+                const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `turkiye_kartogram_${appState.metric}_${appState.mode}.svg`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+        }
+
+        // Initialize Application when DOM ready
+        window.addEventListener("DOMContentLoaded", initGISApp);
+    </script>
+</body>
+</html>
